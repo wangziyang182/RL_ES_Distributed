@@ -23,7 +23,7 @@ class train_ES():
 #                env = 'MountainCarContinuous-v0',    # depending on how it is initialized - could possibly fall into local minimum
 #                env = 'MountainCar-v0',
                 gamma = 0.99,
-                sigma = 1,
+                sigma = 0.1,
                 lr = 3 * 1e-2,
                 max_length = 2000,
                 num_test = 1,
@@ -232,9 +232,10 @@ class train_ES():
                     SGD_gradient = SGD_.get_gradients(gradient)
                     param = param + SGD_gradient
 
-                if iteration % 10 == 0:
+                if iteration % 50 == 0:
                     normal = Normalizer(state_space)
-                    bbnp.roll_out(param,env,self.env,normal,render = True)
+                    video_env = gym.wrappers.Monitor(env, './videos/' + str(time.strftime("%Y%m%d_%H%M%S", time.localtime(time.time()))) + '/')
+                    bbnp.roll_out(param,video_env,self.env,normal,render = True)
                 print("-" * 100)
 
                 te = time.time()
