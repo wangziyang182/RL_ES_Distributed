@@ -1,4 +1,5 @@
 import numpy as np
+from scipy.linalg import hadamard
 
 class SGD(object):
     
@@ -28,10 +29,17 @@ def get_info_summary(list_of_dict):
 
     return fit, anti_fit, seed_id 
 
-def get_guassian_matrices(random_seed,number_worker,len_param,sigma):
+def get_noise_matrices(random_seed,number_worker,len_param,sigma,noise_type):
     for i,seed in enumerate(random_seed):
         np.random.seed(seed)
-        noise_ele = np.random.randn(number_worker[i],len_param)
+        
+        if noise_type == 'Gaussian':
+            noise_ele = np.random.randn(number_worker[i],len_param)
+        elif noise_type == 'Hadamard':
+            h_size = 1<<((max(number_worker[i],len_param)-1).bit_length())
+            h = hadamard(h_size)
+            noise_ele = (h@np.diag(np.random.choice([-1,1], h_size)))[:number_worker[i],:len_param]
+        
         try:
             noise = np.vstack((noise,noise_ele))
         except:
@@ -39,7 +47,9 @@ def get_guassian_matrices(random_seed,number_worker,len_param,sigma):
 
     return noise * sigma
 
-
+def compute_weight_decay(weight_decay, model_param_list):
+  model_param_grid = np.array(model_param_list)
+  return - weight_decay * np.mean(model_param_grid * model_param_grid, axis=1)
 
 
 

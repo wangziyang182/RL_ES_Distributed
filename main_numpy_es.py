@@ -5,23 +5,25 @@ import os
 import matplotlib.pyplot as plt
 import gym
 import numpy as np
-from utils import SGD, get_info_summary,get_guassian_matrices
+from scipy.linalg import hadamard
+from utils import SGD, get_info_summary,get_noise_matrices, compute_weight_decay
 from Normalizer import Normalizer
 import json
 import time
 import sys
+import cma
 
 class train_ES():
     def __init__(
                 self,
                 iterations = 20000,
-                num_perturbations = 64,
-                # env = 'BipedalWalker-v2',
-                # env = 'CartPole-v1',
-                # env = 'MountainCarContinuous-v0',
-                env = 'MountainCar-v0',
+                num_perturbations = 256,
+                env = 'BipedalWalker-v2',
+#                env = 'CartPole-v1',
+#                env = 'MountainCarContinuous-v0',    # depending on how it is initialized - could possibly fall into local minimum
+#                env = 'MountainCar-v0',
                 gamma = 0.99,
-                sigma = 1,
+                sigma = 0.1,
                 lr = 3 * 1e-2,
                 max_length = 2000,
                 num_test = 1,
@@ -29,7 +31,9 @@ class train_ES():
                 best = 32,
                 reward_renormalize = False,
                 state_renormalize = False,
-                num_cpu = 5
+                num_cpu = 8,
+                noise_type = 'Gaussian',
+                method_type = 'Vanilla',
                 ):
 
         self.iterations = iterations
@@ -45,7 +49,9 @@ class train_ES():
         self.reward_renormalize = reward_renormalize
         self.state_renormalize = state_renormalize
         self.num_cpu = num_cpu
-
+        
+        self.noise_type = noise_type
+        self.method_type = method_type
 
         global param_dir 
         param_dir = 'Param'
@@ -57,15 +63,23 @@ class train_ES():
         param_dict = {}
 
 
-    def _do_work(self,queue,bbnp,param,action_space,state_space,max_length,seed_id,num_workers,env,continuous_action):
+    def _do_work(self,queue,bbnp,param,action_space,state_space,max_length,seed_id,num_workers,env,continuous_action,cma_param):
         start = time.time()
         np.random.seed(seed_id)
-
-        noises = self.sigma * np.random.randn(num_workers,len(param))
-        noisy_param = param + noises
         
-        fittness = []
-        anti_fittness = []
+        if self.noise_type == 'Gaussian':
+            noises = self.sigma * np.random.randn(num_workers,len(param))
+            noisy_param = param + noises
+        elif self.noise_type == 'Hadamard':
+            h_size = 1<<((max(num_workers,len(param))-1).bit_length())
+            h = hadamard(h_size)
+            noises = self.sigma*(h@np.diag(np.random.choice([-1,1], h_size)))[:num_workers,:len(param)]
+            noisy_param = param + noises
+        elif self.noise_type == 'CMA':
+            noisy_param = cma_param
+        
+        fitness = []
+        anti_fitness = []
         worker_summary = {}
 
 
@@ -74,23 +88,23 @@ class train_ES():
             #do the roll out
             if self.state_renormalize == True:
                 normal = Normalizer(state_space)
-                ind_fit = bbnp.roll_out(ind,env,normal,render = False,state_renormalize = True)
+                ind_fit = bbnp.roll_out(ind,env,self.env,normal,render = False,state_renormalize = True)
                 normal = Normalizer(state_space)
-                ind_fit_anti = bbnw.roll_out(-ind,env,normal,render = False,state_renormalize = True)
+                ind_fit_anti = bbnp.roll_out(-ind,env,self.env,normal,render = False,state_renormalize = True)
             else:
                 normal = Normalizer(state_space)
-                ind_fit = bbnp.roll_out(ind,env,normal,render = False,init = False)
-                ind_fit_anti = bbnp.roll_out(-ind,env,normal,render = False,init = False)
+                ind_fit = bbnp.roll_out(ind,env,self.env,normal,render = False,init = False)
+                ind_fit_anti = bbnp.roll_out(-ind,env,self.env,normal,render = False,init = False)
 
 
-            fittness.append(ind_fit)
-            anti_fittness.append(ind_fit_anti)
+            fitness.append(ind_fit)
+            anti_fitness.append(ind_fit_anti)
 
         end = time.time()
         # print('process id:{}  |  queue time:{}  |  seed_id:{}'.format(os.getpid(),end-start,seed_id))
 
-        worker_summary['fit'] = fittness
-        worker_summary['anti_fit'] = anti_fittness
+        worker_summary['fit'] = fitness
+        worker_summary['anti_fit'] = anti_fitness
         worker_summary['seed_id'] = seed_id
         queue.put(worker_summary)
 
@@ -129,33 +143,48 @@ class train_ES():
             #initialize param
             param = np.array(bbnp.get_flat_param())
             SGD_ = SGD(param, self.lr)
+            
+            cma_es = cma.CMAEvolutionStrategy(param,self.sigma,{'popsize': self.num_perturbations,})
 
             for iteration in range(self.iterations):
+                
+                ts = time.time()
+                
                 if self.num_perturbations % self.num_cpu != 0:
                     seed_id =  np.random.randint(np.iinfo(np.int32(10)).max, size=self.num_cpu + 1)
                 else:
                     seed_id = np.random.randint(np.iinfo(np.int32(10)).max, size=self.num_cpu)
 
+                
+                cma_param = np.array(cma_es.ask())
+
                 queue = Queue()
 
                 num_workers = [int(self.num_perturbations / self.num_cpu)] * self.num_cpu + [self.num_perturbations % self.num_cpu]
-                workers = [Process(target = self._do_work,args = (queue,bbnp,param,action_space,state_space,self.max_length,seed_id[i],num_workers[i],env,self.continuous_action))\
+                cma_param_slicer = [0]
+                cma_param_slicer.extend(num_workers)
+                cma_param_slicer = np.cumsum(cma_param_slicer)
+                workers = [Process(target = self._do_work,args = (queue,bbnp,param,action_space,state_space,self.max_length,seed_id[i],num_workers[i],env,self.continuous_action,cma_param[cma_param_slicer[i]:cma_param_slicer[i+1],:]))\
                 for i in range(len(seed_id))]
 
                 for worker in workers:
                     worker.start()
-                for worker in workers:
-                    worker.join()
 
                 results = [queue.get() for p in workers]
-                pert_fittness,anti_pert_fittness,seed_id = get_info_summary(results)
-                print('pert_fit',pert_fittness,'\n','anti_pert_fit',anti_pert_fittness,'\n','seed_id',seed_id)
-                pert_fittness = np.array(pert_fittness)[...,None]
-                anti_pert_fittness = np.array(anti_pert_fittness)[...,None]
-                noises = get_guassian_matrices(seed_id,num_workers,len(param),self.sigma)
+                
+                # Swapping this with the above line so deadlock is avoided
+                for worker in workers:
+                    worker.join()
+                
+                pert_fitness,anti_pert_fitness,seed_id = get_info_summary(results)
+#                print('pert_fit',pert_fitness,'\n','anti_pert_fit',anti_pert_fitness,'\n','seed_id',seed_id)
+                pert_fitness = np.array(pert_fitness)[...,None]
+                anti_pert_fitness = np.array(anti_pert_fitness)[...,None]
+                if self.noise_type in ['Gaussian','Hadamard']:
+                    noises = get_noise_matrices(seed_id,num_workers,len(param),self.sigma,self.noise_type)
 
                 #record average_fit
-                average_fit = np.sum(pert_fittness)/self.num_perturbations
+                average_fit = np.sum(pert_fitness)/self.num_perturbations
 
                 fit_list.append(average_fit)
                 iteration_list.append(iteration)
@@ -165,32 +194,37 @@ class train_ES():
                 plt.draw()
                 plt.pause(0.3)
 
-                original_best_search = False
-                original = True
-
                 #Ranking best
-                if original_best_search == True:
+                if self.method_type == 'Rank':
 
-                    top_ind = np.sort(np.argsort(pert_fittness,axis =0)[-self.best:][::-1],axis = 0).flatten()
-                    pert_fittness = pert_fittness[top_ind]
-                    gradient = (1 / len(top_ind) / self.sigma * (noises[top_ind,:].T@pert_fittness)).flatten()
+                    top_ind = np.sort(np.argsort(pert_fitness,axis =0)[-self.best:][::-1],axis = 0).flatten()
+                    pert_fitness = pert_fitness[top_ind]
+                    gradient = (1 / len(top_ind) / self.sigma * (noises[top_ind,:].T@pert_fitness)).flatten()
                     SGD_gradient = SGD_.get_gradients(gradient)
                     param = param + SGD_gradient
 
-                #vanllia
-                elif original == True:
-                    gradient = (1 / self.num_perturbations / self.sigma * (noises.T@pert_fittness)).flatten()
+                #Vanilla
+                elif self.method_type == 'Vanilla':
+                    gradient = (1 / self.num_perturbations / self.sigma * (noises.T@pert_fitness)).flatten()
                     SGD_gradient = SGD_.get_gradients(gradient)
-                    # print(SGD_gradient)
+#                    print("gradient")
+#                    print(SGD_gradient)
+#                    print("param")
+#                    print(param)
                     param = param + SGD_gradient
+                    
+                #CMA
+                elif self.method_type == 'CMA':
+                    cma_es.tell(cma_param,-pert_fitness[:,0] - compute_weight_decay(0.01,cma_param))
+                    param = cma_es.result[5] # mean of all perturbations - for render and save - not used to update new space
 
                 #ARS
-                else:
-                    fb_fittness = np.hstack((pert_fittness,anti_pert_fittness))
-                    top_ind = np.sort(np.argsort(np.max(fb_fittness,axis = 1,keepdims = True),axis = 0)[-self.best:][::-1],axis = 0).flatten()
+                elif self.method_type == 'ARS':
+                    fb_fitness = np.hstack((pert_fitness,anti_pert_fitness))
+                    top_ind = np.sort(np.argsort(np.max(fb_fitness,axis = 1,keepdims = True),axis = 0)[-self.best:][::-1],axis = 0).flatten()
                     # print(top_ind.shape)
-                    fit_diff = pert_fittness - anti_pert_fittness
-                    reward_noise = np.std(np.vstack((pert_fittness,anti_pert_fittness)))
+                    fit_diff = pert_fitness - anti_pert_fitness
+                    reward_noise = np.std(np.vstack((pert_fitness,anti_pert_fitness)))
                     fit_diff = fit_diff[top_ind]
                     # print(fit_diff.shape)
                     # print(noises[top_ind,:].shape)
@@ -200,11 +234,14 @@ class train_ES():
 
                 if iteration % 50 == 0:
                     normal = Normalizer(state_space)
-                    bbnp.roll_out(param,env,normal,render = True)
+                    video_env = gym.wrappers.Monitor(env, './videos/' + str(time.strftime("%Y%m%d_%H%M%S", time.localtime(time.time()))) + '/')
+                    bbnp.roll_out(param,video_env,self.env,normal,render = True)
                 print("-" * 100)
 
+                te = time.time()
+
                 #print the results
-                print('iteration : {} |  average_fit : {}'.format(iteration,average_fit))
+                print('iteration: {} | average_fit: {} | # params: {} | time: {:2.2f}s'.format(iteration,average_fit,len(param),te-ts))
 
 
                 if average_fit > best_reward:
@@ -235,6 +272,6 @@ class train_ES():
 
 
 if __name__ == '__main__':
-    ES = train_ES(env = 'MountainCarContinuous-v0',continuous_action = True)
+    ES = train_ES(env = 'BipedalWalker-v2',continuous_action = True,noise_type='CMA',method_type='CMA')
     ES.train()
 
