@@ -17,10 +17,15 @@ class bb_numpy():
 
 
     def forward_propagate(self,x,init = True):
+        
         if self.continuous_action == True:
-            action = self._add_layer(x,self.state_space,self.action_space,0,activation = np.tanh,init = init)[0]
+            layer_0 = self._add_layer(x,self.state_space,self.state_space*2,0,activation = np.tanh,init = init)
+            layer_1 = self._add_layer(layer_0,self.state_space*2,self.state_space*2,1,activation = np.tanh,init = init)
+            action = self._add_layer(layer_1,self.state_space*2,self.action_space,2,activation = np.tanh,init = init)[0]
         else:
-            action = self._add_layer(x,self.state_space,self.action_space,0,activation = softmax,init = init)
+            layer_0 = self._add_layer(x,self.state_space,self.state_space*2,0,activation = np.tanh,init = init)
+            layer_1 = self._add_layer(layer_0,self.state_space*2,self.state_space*2,1,activation = np.tanh,init = init)
+            action = self._add_layer(layer_1,self.state_space*2,self.action_space,2,activation = softmax,init = init)
             action = np.argmax(action)
         return action
 
@@ -66,13 +71,15 @@ class bb_numpy():
             .reshape((self.b_list[i].shape[0], self.b_list[i].shape[1]))
             start_idx += self.b_list[i].shape[0] * self.b_list[i].shape[1] 
 
-    def roll_out(self,param,env,normalizer,render = False, init = False):
+    def roll_out(self,param,env,env_name,normalizer,render = False, init = False):
         self.set_flat_param(param)
 
-        state = env.reset()
         done = False
+        fallen = False # bipedal specific
         state = env.reset()
         state = state[np.newaxis,...]
+        
+        
         individual_fit = 0
 
         counter = 0
@@ -88,12 +95,21 @@ class bb_numpy():
             if self.state_renormalize == True:
                 state = normalizer.observe_renormalize(state)
             state = state[np.newaxis,...]
+            
+            if env_name == 'BipedalWalker-v2' and reward == -100:
+                reward = 0
+                fallen = True
+            
             individual_fit += reward
 
-            counter +=0
+            if done:
+                if env_name == 'BipedalWalker-v2' and (not fallen) and individual_fit > 300:
+                    individual_fit += 100
+
+            counter += 1
             if counter > self.max_length:
                 break
-
+            
         env.close()
         return individual_fit
 
