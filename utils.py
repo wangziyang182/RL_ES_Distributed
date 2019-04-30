@@ -1,5 +1,6 @@
 import numpy as np
-from scipy.linalg import hadamard
+from scipy.linalg import hadamard,eigh,sqrtm
+from scipy.spatial.distance import pdist, squareform
 
 class SGD(object):
     
@@ -10,7 +11,6 @@ class SGD(object):
     def get_gradients(self, gradients):
         self.v = self.momentum * self.v + (1. - self.momentum) * gradients
         return self.lr * self.v
-
 
 def softmax(x):
     
@@ -50,6 +50,86 @@ def get_noise_matrices(random_seed,number_worker,len_param,sigma,noise_type):
 def compute_weight_decay(weight_decay, model_param_list):
   model_param_grid = np.array(model_param_list)
   return - weight_decay * np.mean(model_param_grid * model_param_grid, axis=1)
+
+def sample(L, k=None, flag_gpu=False):
+    D,V = eigh(L)
+    E = get_sympoly(D, k, flag_gpu=flag_gpu)
+    N = D.shape[0]
+    if k is None:
+        # general dpp
+        D = D / (1 + D)
+        V = V[:,np.random.rand(N) < D]
+        k = V.shape[1]
+    else:
+        # k-dpp
+        v_idx = sample_k(D, E, k, flag_gpu=flag_gpu)
+        V = V[:,v_idx]
+
+    rst = list()
+
+    for i in range(k-1,-1,-1):
+        # choose indices
+
+        P = np.sum(V**2, axis=1)
+
+        row_idx = np.random.choice(range(N), p=P/np.sum(P))
+        col_idx = np.nonzero(V[row_idx])[0][0]
+
+        rst.append(row_idx)
+
+        # update V
+        V_j = np.copy(V[:,col_idx])
+        V = V - np.outer(V_j, V[row_idx]/V_j[row_idx])
+        V[:,col_idx] = V[:,i]
+        V = V[:,:i]
+
+        # reorthogonalize
+        if i > 0:
+            V = sym(V)
+
+    # rst = np.sort(rst)
+
+    return rst
+
+def sample_k(D, E, k, flag_gpu=False):
+    i = D.shape[0]
+    remaining = k
+    rst = list()
+
+    while remaining > 0:
+        if i == remaining:
+            marg = 1.
+        else:
+            marg = D[i-1] * E[remaining-1, i-1] / E[remaining, i]
+
+        if np.random.rand() < marg:
+            rst.append(i-1)
+            remaining -= 1
+        i -= 1
+
+    return np.array(rst)
+
+def get_sympoly(D, k, flag_gpu=False):
+    N = D.shape[0]
+    if flag_gpu:
+        pass
+    else:
+        E = np.zeros((k+1, N+1))
+
+    E[0] = 1.
+    for l in range(1,k+1):
+        E[l,1:] = np.copy(np.multiply(D, E[l-1,:N]))
+        E[l] = np.cumsum(E[l], axis=0)
+
+    return E
+
+def sym(X):
+    return X.dot(np.linalg.inv(np.real(sqrtm(X.T.dot(X)))))
+
+def gaussian_kernelize(X):
+    pairwise_dists = squareform(pdist(X, 'euclidean'))
+    return np.exp(-pairwise_dists ** 2 / 0.5 ** 2)
+
 
 
 
