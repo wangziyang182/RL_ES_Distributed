@@ -4,12 +4,13 @@ from scipy.spatial.distance import pdist, squareform
 
 def cond_kdpp(A,X,k):
     if A.size == 0:
-        L = gaussian_kernelize(X)
+        L = angular_kernelize(X)
+        print('L=',L)
         idx = sample(L,k=k)
         return idx
     n = len(A)
     X_big = np.vstack((A,X))
-    L = gaussian_kernelize(X_big)
+    L = angular_kernelize(X_big)
     # print('L.shape=',L.shape)
     I_A_comp = np.eye(len(L))
     I_A_comp[:n] = 0
@@ -71,7 +72,7 @@ def compute_weight_decay(weight_decay, model_param_list):
   return - weight_decay * np.mean(model_param_grid * model_param_grid, axis=1)
 
 def sample(L, k=None, flag_gpu=False):
-    print('L =',L)
+    # print('L =',L)
     D,V = eigh(L)
     E = get_sympoly(D, k, flag_gpu=flag_gpu)
     N = D.shape[0]
@@ -102,7 +103,7 @@ def sample(L, k=None, flag_gpu=False):
         V = V - np.outer(V_j, V[row_idx]/V_j[row_idx])
         V[:,col_idx] = V[:,i]
         V = V[:,:i]
-        print('V=',V)
+        # print('V=',V)
         # reorthogonalize
         if i > 0:
             V = sym(V)
@@ -154,6 +155,11 @@ def sym(X):
 def gaussian_kernelize(X):
     pairwise_dists = squareform(pdist(X, 'euclidean'))
     return np.exp(-pairwise_dists ** 2 / 0.5 ** 2)
+
+def angular_kernelize(X):
+    pairwise_angles = np.arccos(-squareform(pdist(X, 'cosine'))+1)
+    return 1-(2*pairwise_angles/np.pi)
+
 
 
 
