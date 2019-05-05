@@ -7,7 +7,7 @@ import gym
 import numpy as np
 from scipy.linalg import hadamard
 from scipy.spatial.distance import pdist, squareform, cdist
-from utils import SGD, get_info_summary,get_noise_matrices, compute_weight_decay
+from utils import SGD, get_info_summary,get_noise_matrices, compute_weight_decay,sample, gaussian_kernelize,get_sympoly,cond_kdpp
 from Normalizer import Normalizer
 import json
 import time
@@ -20,8 +20,8 @@ class train_ES():
                 iterations = 20000,
                 num_perturbations = 256,
                 # env = 'BipedalWalker-v2',
-#                env = 'CartPole-v1',
-                env = 'MountainCarContinuous-v0',    # depending on how it is initialized - could possibly fall into local minimum
+                env = 'CartPole-v1',
+                # env = 'MountainCarContinuous-v0',    # depending on how it is initialized - could possibly fall into local minimum
 #                env = 'MountainCar-v0',
                 gamma = 0.99,
                 sigma = 0.1,
@@ -35,9 +35,10 @@ class train_ES():
                 num_cpu = 8,
                 noise_type = 'Gaussian',
                 method_type = 'Vanilla',
-                cond_DPP = True
+                cond_DPP = True,
+                perc_reuse = .2
                 ):
-
+        self.perc_reuse = perc_reuse
         self.iterations = iterations
         self.num_perturbations = num_perturbations
         self.env = env
@@ -54,7 +55,7 @@ class train_ES():
         self.noise_type = noise_type
         self.method_type = method_type
         self.cond_DPP = cond_DPP
-        self.hist = []
+        self.buffer = []
 
         global param_dir 
         param_dir = 'Param'
@@ -65,95 +66,56 @@ class train_ES():
         global param_dict
         param_dict = {}
 
-    def kernel_se(_X1,_X2,_hyp={'gain':1,'len':1,'noise':1e-8}):
-    hyp_gain = float(_hyp['gain'])**2
-    hyp_len  = 1/float(_hyp['len'])
-    pairwise_dists = cdist(_X1,_X2,'euclidean')
-    K = hyp_gain*np.exp(-pairwise_dists ** 2 / (hyp_len**2))
-    return K
 
-	def kdpp(_X,_k):
-	    # Select _n samples out of _X using K-DPP
-	    n,d = _X.shape[0],_X.shape[1]
-	    mid_dist = np.median(cdist(_X,_X,'euclidean'))
-	    out,idx = np.zeros(shape=(_k,d)),[]
-	    for i in range(_k):
-	        if i == 0:
-	            rand_idx = np.random.randint(n)
-	            idx.append(rand_idx) # append index
-	            out[i,:] = _X[rand_idx,:] # append  inputs
-	        else:
-	            det_vals = np.zeros(n)
-	            for j in range(n):
-	                if j in idx:
-	                    det_vals[j] = -np.inf
-	                else:
-	                    idx_temp = idx.copy()
-	                    idx_temp.append(j)
-	                    X_curr = _X[idx_temp,:]
-	                    K = kernel_se(X_curr,X_curr,{'gain':1,'len':mid_dist,'noise':1e-4})
-	                    det_vals[j] = np.linalg.det(K)
-	            max_idx = np.argmax(det_vals)
-	            idx.append(max_idx)
-	            out[i,:] = _X[max_idx,:] # append  inputs
-    	return out,idx
-
-    def cond_kdpp(_A,_B,noisy_param,perc,_k):
-    	#take some perc of _A that is close to noisy_param (=param+noise from prev iteration)
+    def find_closest(old_noisy_param, noisy_param, closest_perc):
+    	n = np.round(len(noisy_param)*closest_perc)
+    	dists = np.linalg.norm(old_noisy_param-noisy_param)
+    	closest_indices = dists.argsort()[:n]
+    	return old_noisy_param[closest_indices]
 
 
 
 
-
-    def _do_work(self,queue,bbnp,param,action_space,state_space,max_length,seed_id,num_workers,env,continuous_action,cma_param):
+    def _do_work(self,queue,bbnp,param,action_space,state_space,max_length,seed_id,num_workers,env,continuous_action,cma_param,index_start):
         start = time.time()
         np.random.seed(seed_id)
-        if self.cond_DPP:
-	        if self.noise_type == 'Gaussian':
-	        	if self.hist:
-	        		self.kdpp()
-		            noises = self.sigma * np.random.randn(num_workers,len(param))
-		            noisy_param = param + noises
-		        else:
-		        	noises = self.sigma * np.random.randn(num_workers,len(param))
-		            noisy_param = param + noises
-	        elif self.noise_type == 'Hadamard':
-	            h_size = 1<<((max(num_workers,len(param))-1).bit_length())
-	            h = hadamard(h_size)
-	            noises = self.sigma*(h@np.diag(np.random.choice([-1,1], h_size)))[:num_workers,:len(param)]
-	            noisy_param = param + noises
-	        elif self.noise_type == 'CMA':
-	            noisy_param = cma_param
-	    else:
-	    	if self.noise_type == 'Gaussian':
-	            noises = self.sigma * np.random.randn(num_workers,len(param))
-	            noisy_param = param + noises
-	        elif self.noise_type == 'Hadamard':
-	            h_size = 1<<((max(num_workers,len(param))-1).bit_length())
-	            h = hadamard(h_size)
-	            noises = self.sigma*(h@np.diag(np.random.choice([-1,1], h_size)))[:num_workers,:len(param)]
-	            noisy_param = param + noises
-	        elif self.noise_type == 'CMA':
-	            noisy_param = cma_param
+        if self.noise_type == 'Gaussian':
+                noises = self.sigma * np.random.randn(num_workers,len(param))
+                noisy_param = param + noises
 
-        
+        elif self.noise_type == 'Hadamard':
+            h_size = 1<<((max(num_workers,len(param))-1).bit_length())
+            h = hadamard(h_size)
+            noises = self.sigma*(h@np.diag(np.random.choice([-1,1], h_size)))[:num_workers,:len(param)]
+            noisy_param = param + noises
+        elif self.noise_type == 'CMA':
+            noisy_param = cma_param
+        elif self.noise_type == 'CDPP':
+        	noisy_param = self.buffer[index_start:index_start+num_workers]
+    
         fitness = []
         anti_fitness = []
         worker_summary = {}
-
-
+        fitness_idx_dict = {}
+        anti_fitness_idx_dict = {}
+        idx  = 0
         for ind in noisy_param:
-
             #do the roll out
             if self.state_renormalize == True:
                 normal = Normalizer(state_space)
                 ind_fit = bbnp.roll_out(ind,env,self.env,normal,render = False,state_renormalize = True)
+                fitness_idx_dict[ind_fit]=idx
                 normal = Normalizer(state_space)
                 ind_fit_anti = bbnp.roll_out(-ind,env,self.env,normal,render = False,state_renormalize = True)
+                anti_fitness_idx_dict[ind_fit_anti]=idx
+                idx += 1
             else:
                 normal = Normalizer(state_space)
                 ind_fit = bbnp.roll_out(ind,env,self.env,normal,render = False,init = False)
+                fitness_idx_dict[ind_fit]=idx
                 ind_fit_anti = bbnp.roll_out(-ind,env,self.env,normal,render = False,init = False)
+                anti_fitness_idx_dict[ind_fit_anti]=idx
+                idx += 1
 
 
             fitness.append(ind_fit)
@@ -217,16 +179,39 @@ class train_ES():
                 
                 cma_param = np.array(cma_es.ask())
 
+                if iteration == 0:
+                    X = np.random.randn(self.num_perturbations*3,len(param))
+                    print('X.shape=',X.shape)
+                    cond_indices = cond_kdpp(np.array([]), X, k = self.num_perturbations)
+                    print('cond_indices=',cond_indices)
+                    self.buffer = X[cond_indices]
+
+                else:
+                    dists = np.linalg.norm(self.buffer-param,axis=1)
+                   # print('dists.shape=',dists.shape)
+                    num_closest= int(self.perc_reuse*self.num_perturbations)
+                    closest_indices = dists.argsort()[:num_closest]
+                    X = np.random.randn(self.num_perturbations*3,len(param)) + param
+                    cond_indices = cond_kdpp(self.buffer[closest_indices],X,k=(self.num_perturbations-num_closest))
+
+                    self.buffer = np.vstack((self.buffer[closest_indices],X[cond_indices]))
+
+                    all_indices = []
+
                 queue = Queue()
 
                 num_workers = [int(self.num_perturbations / self.num_cpu)] * self.num_cpu + [self.num_perturbations % self.num_cpu]
+                start_indices = [num_workers[i] * i for i in range(len(num_workers))]
                 cma_param_slicer = [0]
                 cma_param_slicer.extend(num_workers)
                 cma_param_slicer = np.cumsum(cma_param_slicer)
-                workers = [Process(target = self._do_work,args = (queue,bbnp,param,action_space,state_space,self.max_length,seed_id[i],num_workers[i],env,self.continuous_action,cma_param[cma_param_slicer[i]:cma_param_slicer[i+1],:]))\
-                for i in range(len(seed_id))]
+                workers = [Process(target = self._do_work,args = (queue,bbnp,param,action_space,state_space,\
+                    self.max_length,seed_id[i],num_workers[i],\
+                    env,self.continuous_action,cma_param[cma_param_slicer[i]:cma_param_slicer[i+1],:],start_indices[i])) for i in range(len(seed_id))]
+
 
                 for worker in workers:
+
                     worker.start()
 
                 results = [queue.get() for p in workers]
@@ -265,6 +250,17 @@ class train_ES():
                 #Vanilla
                 elif self.method_type == 'Vanilla':
                     gradient = (1 / self.num_perturbations / self.sigma * (noises.T@pert_fitness)).flatten()
+                    SGD_gradient = SGD_.get_gradients(gradient)
+#                    print("gradient")
+#                    print(SGD_gradient)
+#                    print("param")
+#                    print(param)
+                    param = param + SGD_gradient
+
+                elif self.method_type == 'CDPP':
+                    print('self.buffer.shape = ',self.buffer.shape)
+                    print('param.shape = ',param.shape)
+                    gradient = (1 / self.num_perturbations / self.sigma * ((self.buffer - param).T@pert_fitness)).flatten()
                     SGD_gradient = SGD_.get_gradients(gradient)
 #                    print("gradient")
 #                    print(SGD_gradient)
@@ -331,6 +327,6 @@ class train_ES():
 
 
 if __name__ == '__main__':
-    ES = train_ES(env = 'MountainCarContinuous-v0',continuous_action = True,noise_type='CMA',method_type='CMA')
+    ES = train_ES(env = 'CartPole-v1',continuous_action = False,noise_type='CDPP',method_type='CDPP')
     ES.train()
 
