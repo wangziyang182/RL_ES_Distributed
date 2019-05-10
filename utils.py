@@ -1,26 +1,6 @@
 import numpy as np
-from scipy.linalg import hadamard,eigh,sqrtm
+from scipy.linalg import hadamard,eigh,sqrtm,eig,pinv
 from scipy.spatial.distance import pdist, squareform
-
-def cond_kdpp(A,X,k):
-    if A.size == 0:
-        L = angular_kernelize(X)
-        print('L=',L)
-        idx = sample(L,k=k)
-        return idx
-    n = len(A)
-    X_big = np.vstack((A,X))
-    L = angular_kernelize(X_big)
-    # print('L.shape=',L.shape)
-    I_A_comp = np.eye(len(L))
-    I_A_comp[:n] = 0
-
-    t1 = np.linalg.inv(L+I_A_comp)[n:,n:]
-    L_A = np.linalg.inv(t1)-np.eye(len(t1))
-    # print('L_A.shape = ',L_A.shape)
-    idx = sample(L_A,k=k)
-    # print('idx = ',idx)
-    return idx
 
 class SGD(object):
     
@@ -33,10 +13,11 @@ class SGD(object):
         return self.lr * self.v
 
 def softmax(x):
-    
     assert (len(list(x.shape)) == 2),'shape dimension error'
     # print('action',x)
-    return np.exp(x)/np.sum(np.exp(x),axis = 1)
+    e_x = np.exp(x - np.max(x))
+    return e_x / e_x.sum()
+    # return np.exp(x)/np.sum(np.exp(x),axis = 1)
 
 def get_info_summary(list_of_dict):
     fit = [work_info['fit'] for work_info in list_of_dict]
@@ -72,8 +53,10 @@ def compute_weight_decay(weight_decay, model_param_list):
   return - weight_decay * np.mean(model_param_grid * model_param_grid, axis=1)
 
 def sample(L, k=None, flag_gpu=False):
-    # print('L =',L)
-    D,V = eigh(L)
+    D,V = eig(L)
+    D = np.real(D)
+    V = np.real(V)
+    # D = D/np.sqrt(np.sum(D*D,axis = 0, keepdims = True))
     E = get_sympoly(D, k, flag_gpu=flag_gpu)
     N = D.shape[0]
     if k is None:
@@ -103,7 +86,7 @@ def sample(L, k=None, flag_gpu=False):
         V = V - np.outer(V_j, V[row_idx]/V_j[row_idx])
         V[:,col_idx] = V[:,i]
         V = V[:,:i]
-        # print('V=',V)
+
         # reorthogonalize
         if i > 0:
             V = sym(V)
@@ -130,8 +113,27 @@ def sample_k(D, E, k, flag_gpu=False):
 
     return np.array(rst)
 
+
+
+def cond_kdpp(A,X,k):
+    n = len(A)
+    if len(A) == 0:
+        X_big = X
+    else:
+        X_big = np.vstack((A,X))
+    L = angular_kernelize(X_big)
+    I_A_comp = np.eye(len(L))
+    I_A_comp[:n] = 0
+    t1 = np.linalg.inv(L+I_A_comp)[n:,n:]
+    L_A = np.linalg.inv(t1)-np.eye(len(t1))
+    idx = sample(L_A,k=k)
+    return idx
+
+
+
 def get_sympoly(D, k, flag_gpu=False):
     N = D.shape[0]
+
     if flag_gpu:
         pass
     else:
@@ -147,10 +149,10 @@ def get_sympoly(D, k, flag_gpu=False):
 def sym(X):
     # X += 1e-10
     try:
-        X.dot(np.linalg.inv(np.real(sqrtm(X.T.dot(X)))))
+        X.dot(np.linalg.pinv(np.real(sqrtm(X.T.dot(X)))))
     except ValueError:
         print('X =',X)
-    return X.dot(np.linalg.inv(np.real(sqrtm(X.T.dot(X)))))
+    return X.dot(np.linalg.pinv(np.real(sqrtm(X.T.dot(X)))))
 
 def gaussian_kernelize(X):
     pairwise_dists = squareform(pdist(X, 'euclidean'))
@@ -160,11 +162,8 @@ def angular_kernelize(X):
     pairwise_angles = np.arccos(-squareform(pdist(X, 'cosine'))+1)
     return 1-(2*pairwise_angles/np.pi)
 
-
-
-
-
-
-
-
-
+def find_closest(old_noisy_param, noisy_param, closest_perc):
+    n = np.round(len(noisy_param)*closest_perc)
+    dists = np.linalg.norm(old_noisy_param-noisy_param)
+    closest_indices = dists.argsort()[:n]
+    return old_noisy_param[closest_indices]
