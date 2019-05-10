@@ -346,7 +346,7 @@ if __name__ == '__main__':
     #     ES.train()
 
     # for i in range(5):
-    #     ES = train_ES(env = 'MountainCarContinuous-v0',sigma = 0.3,continuous_action = False,noise_type='Gaussian',method_type='ARS',state_renormalize = True,video_save_interval = 200,test = i,iterations = 201)
+    #     ES = train_ES(env = 'MountainCarContinuous-v0',sigma = 0.3,continuous_action = True,noise_type='Gaussian',method_type='ARS',state_renormalize = True,video_save_interval = 200,test = i,iterations = 201)
     #     ES.train()
 
     # for i in range(5):
@@ -354,7 +354,7 @@ if __name__ == '__main__':
     #     ES.train()
 
     # for i in range(5):
-    #     ES = train_ES(env = 'MountainCarContinuous-v0',sigma = 1,continuous_action = True,noise_type='CMA',method_type='CMA',state_renormalize = False,num_perturbations = 128,video_save_interval = 200,test = i,iterations = 201)
+    #     ES = train_ES(env = 'MountainCarContinuous-v0',sigma = 1,continuous_action = True,noise_type='CMA',method_type='CMA',state_renormalize = False,video_save_interval = 200,test = i,iterations = 201)
     #     ES.train()
 
     # for i in range(5):
@@ -363,7 +363,7 @@ if __name__ == '__main__':
 
 
     # for i in range(5):
-    #     ES = train_ES(env = 'Swimmer-v2',sigma = 0.3,continuous_action = True,noise_type='Gaussian',method_type='Vanilla',state_renormalize = True,video_save_interval = 200,test = i,iterations = 201)
+    #     ES = train_ES(env = 'Swimmer-v2',sigma = 0.3,continuous_action = True,noise_type='Gaussian',method_type='Vanilla',state_renormalize = False,video_save_interval = 200,test = i,iterations = 201)
     #     ES.train()
 
     # for i in range(5):
