@@ -13,19 +13,14 @@ class bb_numpy_mc():
         self.w_list = []
         self.b_list = []
 
-    # def _init_model(self,action_space,state_space):
 
 
     def forward_propagate(self,x,init = True):
         
         if self.continuous_action == True:
-            # print('self.state_space=',self.state_space)
             layer_0 = self._add_layer(x,self.state_space,2*self.state_space,0,activation = np.tanh,init = init)
             layer_1 = self._add_layer(layer_0,2*self.state_space,2*self.state_space,1,activation = np.tanh,init = init)
             action = self._add_layer(layer_1,2*self.state_space,self.action_space,2,activation = np.tanh,init = init)[0]
-            # print(self.w_list[0].max())
-            # print(self.w_list[1].max())
-            # action = self._add_layer(x,self.state_space,self.action_space,0,activation = np.tanh,init = init)[0]
         else:
             layer_0 = self._add_layer(x,self.state_space,self.state_space,0,activation = np.tanh,init = init)
             layer_1 = self._add_layer(layer_0,self.state_space,self.state_space,1,activation = np.tanh,init = init)
@@ -130,19 +125,13 @@ class bb_numpy_swimmer():
         self.w_list = []
         self.b_list = []
 
-    # def _init_model(self,action_space,state_space):
 
 
     def forward_propagate(self,x,init = True):
         
         if self.continuous_action == True:
-            # print('self.state_space=',self.state_space)
             layer_0 = self._add_layer(x,self.state_space,self.state_space,0,activation = np.tanh,init = init)
-            # layer_1 = self._add_layer(layer_0,2*self.state_space,2*self.state_space,1,activation = np.tanh,init = init)
             action = self._add_layer(layer_0,self.state_space,self.action_space,1,activation = np.tanh,init = init)[0]
-            # print(self.w_list[0].max())
-            # print(self.w_list[1].max())
-            # action = self._add_layer(x,self.state_space,self.action_space,0,activation = np.tanh,init = init)[0]
         else:
             layer_0 = self._add_layer(x,self.state_space,self.state_space,0,activation = np.tanh,init = init)
             layer_1 = self._add_layer(layer_0,self.state_space,self.state_space,1,activation = np.tanh,init = init)

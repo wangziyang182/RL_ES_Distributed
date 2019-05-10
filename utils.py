@@ -14,10 +14,8 @@ class SGD(object):
 
 def softmax(x):
     assert (len(list(x.shape)) == 2),'shape dimension error'
-    # print('action',x)
     e_x = np.exp(x - np.max(x))
     return e_x / e_x.sum()
-    # return np.exp(x)/np.sum(np.exp(x),axis = 1)
 
 def get_info_summary(list_of_dict):
     fit = [work_info['fit'] for work_info in list_of_dict]
@@ -56,7 +54,6 @@ def sample(L, k=None, flag_gpu=False):
     D,V = eig(L)
     D = np.real(D)
     V = np.real(V)
-    # D = D/np.sqrt(np.sum(D*D,axis = 0, keepdims = True))
     E = get_sympoly(D, k, flag_gpu=flag_gpu)
     N = D.shape[0]
     if k is None:
@@ -91,7 +88,7 @@ def sample(L, k=None, flag_gpu=False):
         if i > 0:
             V = sym(V)
 
-    # rst = np.sort(rst)
+    rst = np.sort(rst)
 
     return rst
 
@@ -147,7 +144,6 @@ def get_sympoly(D, k, flag_gpu=False):
     return E
 
 def sym(X):
-    # X += 1e-10
     try:
         X.dot(np.linalg.pinv(np.real(sqrtm(X.T.dot(X)))))
     except ValueError:

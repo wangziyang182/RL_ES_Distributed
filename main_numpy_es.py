@@ -19,11 +19,7 @@ class train_ES():
                 self,
                 iterations = 20000,
                 num_perturbations = 64,
-                env = 'BipedalWalker-v2',
-#                env = 'CartPole-v1',
-#                env = 'MountainCarContinuous-v0',    # depending on how it is initialized - could possibly fall into local minimum
-#                env = 'MountainCar-v0',
-                # Swimmer-v2
+                env = 'MountainCarContinuous-v0',
                 gamma = 0.99,
                 sigma = 0.01,
                 lr = 3 * 1e-2,
@@ -96,11 +92,6 @@ class train_ES():
         anti_fitness = []
         worker_summary = {}
 
-        # fitness_idx_dict = {}
-        # anti_fitness_idx_dict = {}
-        # idx  = 0
-
-
         for ind in noisy_param:
 
             #do the roll out
@@ -119,8 +110,6 @@ class train_ES():
             anti_fitness.append(ind_fit_anti)
 
         end = time.time()
-        
-        # print('process id:{}  |  queue time:{}  |  seed_id:{}'.format(os.getpid(),end-start,seed_id))
 
         worker_summary['fit'] = fitness
         worker_summary['anti_fit'] = anti_fitness
@@ -170,14 +159,7 @@ class train_ES():
 
             for iteration in range(self.iterations):
                 
-                ts = time.time()
-                
-                # if self.num_perturbations % self.num_cpu != 0:
-                #     seed_id =  np.random.randint(np.iinfo(np.int32(10)).max, size=self.num_cpu + 1)
-                # else:
-                #     seed_id = np.random.randint(np.iinfo(np.int32(10)).max, size=self.num_cpu)
-
-                
+                ts = time.time()                
                 cma_param = np.array(cma_es.ask())
 
 
@@ -185,15 +167,11 @@ class train_ES():
                     if iteration == 0:
 
                         X = np.random.randn(self.num_perturbations*3,len(param))
-                        # print('X.shape=',X.shape)
                         cond_indices = cond_kdpp([], X, k = self.num_perturbations)
-                        # print('cond_indices=',cond_indices)
                         self.buffer = X[cond_indices]
 
                     else:
-                        # print(self.buffer)
                         dists = np.linalg.norm(self.buffer-param,axis=1)
-                       # print('dists.shape=',dists.shape)
                         num_closest= int(self.perc_reuse*self.num_perturbations)
 
                         closest_indices = dists.argsort()[:num_closest]
@@ -202,7 +180,6 @@ class train_ES():
                         cond_indices = cond_kdpp(self.buffer[closest_indices],X,k=(self.num_perturbations-num_closest))
 
                         self.buffer = np.vstack((self.buffer[closest_indices],X[cond_indices]))
-                        # print(self.buffer)
 
                         all_indices = []
 
@@ -217,7 +194,6 @@ class train_ES():
                 if self.noise_type == 'CDPP' and iteration!=0:
                     num_perts = self.num_perturbations - int(self.perc_reuse*self.num_perturbations)
                     shared_amt = (self.num_perturbations - int(self.perc_reuse*self.num_perturbations))//self.num_cpu
-                    # num_workers = [int((self.num_perturbations - int(self.perc_reuse*self.num_perturbations))/ self.num_cpu)] * self.num_cpu + [self.num_perturbations % self.num_cpu]
                 while num_perts > shared_amt:
                         num_perts -= shared_amt
                         num_workers.append(shared_amt)
@@ -247,20 +223,16 @@ class train_ES():
                     worker.join()
                 if self.noise_type == 'CDPP':
                     if iteration != 0:
-                        # print('pert_fitness.shape=',pert_fitness.shape)
-                        # print('closest_indices=',closest_indices) 
                         old_pert_fitness = pert_fitness[closest_indices]
                         old_anti_pert_fitness = anti_pert_fitness[closest_indices]
                 
                 pert_fitness,anti_pert_fitness,seed_id = get_info_summary(results)
-#                print('pert_fit',pert_fitness,'\n','anti_pert_fit',anti_pert_fitness,'\n','seed_id',seed_id)
                 pert_fitness = np.array(pert_fitness)[...,None]
                 anti_pert_fitness = np.array(anti_pert_fitness)[...,None]
 
                 if self.noise_type == 'CDPP':
                     if iteration != 0:
-                        # print('(when stacking) pert_fitness=',pert_fitness.shape)
-                        # print('(when stacking) old_pert_fitness=',old_pert_fitness.shape)
+                        
                         pert_fitness = np.vstack((old_pert_fitness,pert_fitness))
                         anti_pert_fitness = np.vstack((old_anti_pert_fitness,anti_pert_fitness))
 
@@ -303,30 +275,12 @@ class train_ES():
 
                 #ARS
                 elif self.method_type == 'ARS':
-                    # fb_fitness = np.hstack((pert_fitness,anti_pert_fitness))
-                    # top_ind = np.sort(np.argsort(np.max(fb_fitness,axis = 1,keepdims = True),axis = 0)[-self.best:][::-1],axis = 0).flatten()
-                    # # print(top_ind.shape)
-                    # fit_diff = pert_fitness - anti_pert_fitness
-                    # reward_noise = np.std(np.vstack((pert_fitness,anti_pert_fitness)))
-                    # fit_diff = fit_diff[top_ind]
-                    # # print(fit_diff.shape)
-                    # # print(noises[top_ind,:].shape)
-                    # gradient = (1 / len(top_ind) / self.sigma /reward_noise * (noises[top_ind,:].T@fit_diff)).flatten()
-                    # SGD_gradient = SGD_.get_gradients(gradient)
-                    # param = param + SGD_gradient
-
                     fb_fitness = np.hstack((pert_fitness,anti_pert_fitness))
                     top_ind = (np.argsort(np.max(fb_fitness,axis = 1,keepdims = True),axis = 0)[-self.best:][::-1]).flatten()
-                    # print(top_ind.shape)
                     fit_diff = pert_fitness - anti_pert_fitness
-                    reward_noise1 = np.std(np.vstack((pert_fitness,anti_pert_fitness)))
+                    reward_noise = np.std(np.vstack((pert_fitness,anti_pert_fitness)))
                     fit_diff = fit_diff[top_ind]
-
-                    reward_noise2 = np.std(np.max(fb_fitness[top_ind],axis = 0),axis = 0)
-                    reward_noise3 = np.std(fit_diff,axis = 0)
-                    # print(fit_diff.shape)
-                    # print(noises[top_ind,:].shape)
-                    gradient = (1 / len(top_ind) / self.sigma/reward_noise1 * (noises[top_ind,:].T@fit_diff)).flatten()
+                    gradient = (1 / len(top_ind) / self.sigma/reward_noise * (noises[top_ind,:].T@fit_diff)).flatten()
                     SGD_gradient = SGD_.get_gradients(gradient)
                     param = param + SGD_gradient
 
@@ -334,11 +288,8 @@ class train_ES():
 
                 #CDPP
                 elif self.method_type == 'CDPP':
-                    # print('self.buffer.shape = ',self.buffer.shape)
-                    # print('param.shape = ',param.shape)
                     cond_noise = self.buffer - param
                     if iteration != 0:
-                    #     print('cond_noise.shape=',cond_noise.shape,'reused_samples.shape=',reused_samples.shape)
                         noises = np.vstack((reused_samples,cond_noise))
                     else:
                         noises = cond_noise
@@ -346,16 +297,10 @@ class train_ES():
 
                     top_ind = np.sort(np.argsort(pert_fitness,axis =0)[-self.best:][::-1],axis = 0).flatten()
                     best_pert_fitness = pert_fitness[top_ind]
-                    # gradient = (1 / len(top_ind) / self.sigma * (noises[ctop_ind,:].T@pert_fitness)).flatten()
+                    
                     gradient = (1 / self.num_perturbations / self.sigma * ((self.buffer - param)[top_ind,:].T@best_pert_fitness)).flatten()
-                    # SGD_gradient = SGD_.get_gradients(gradient)
-#                    print("gradient")
-#                    print(SGD_gradient)
-#                    print("param")
-#                    print(param)
-                    # param = param + SGD_gradient
+                   
                     param = param + self.lr * gradient
-                    # print('param',param)
 
                 if iteration % self.video_save_interval == 0 and iteration !=0:
                     normal = Normalizer(state_space)
@@ -369,11 +314,8 @@ class train_ES():
                 print('iteration: {} | average_fit: {} | # params: {} | time: {:2.2f}s'.format(iteration,average_fit,len(param),te-ts))
 
 
-                # if average_fit > best_reward:
                 self.save_param(path,name,param,average_fit,iteration)
-            #save weights
-            # bbnw.saver.save(bbnw.sess,)
-            # np.save(param_dir + 'param', jkj)
+            
     
                 
     def save_param(self,path,name,param,average_fit,iteration):
@@ -416,13 +358,13 @@ if __name__ == '__main__':
     #     ES.train()
 
     # for i in range(5):
-    #     ES = train_ES(env = 'MountainCarContinuous-v0',sigma = 0.3,continuous_action = True,noise_type='CDPP',method_type='CDPP',state_renormalize = False,video_save_interval = 200,test = i,iterations = 201)
+    #     ES = train_ES(env = 'MountainCarContinuous-v0',sigma = 0.3,continuous_action = True,noise_type='CDPP',method_type='CDPP',state_renormalize = True,video_save_interval = 200,test = i,iterations = 201)
     #     ES.train()
 
 
-    for i in range(5):
-        ES = train_ES(env = 'Swimmer-v2',sigma = 0.3,continuous_action = True,noise_type='Gaussian',method_type='Vanilla',state_renormalize = True,video_save_interval = 200,test = i,iterations = 201)
-        ES.train()
+    # for i in range(5):
+    #     ES = train_ES(env = 'Swimmer-v2',sigma = 0.3,continuous_action = True,noise_type='Gaussian',method_type='Vanilla',state_renormalize = True,video_save_interval = 200,test = i,iterations = 201)
+    #     ES.train()
 
     # for i in range(5):
     #     ES = train_ES(env = 'Swimmer-v2',sigma = 0.1,continuous_action = True,noise_type='Gaussian',method_type='ARS',state_renormalize = True,video_save_interval = 200,test = i,iterations = 201)
